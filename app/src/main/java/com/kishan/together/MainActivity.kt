@@ -122,7 +122,7 @@ fun Setup(onDone: () -> Unit) {
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun Home() {
     val users by Repo.users.collectAsState()
@@ -130,83 +130,115 @@ fun Home() {
     var now by remember { mutableLongStateOf(Repo.now()) }
     LaunchedEffect(Unit) { while (true) { now = Repo.now(); delay(1000) } }
     var editNick by remember { mutableStateOf<Person?>(null) }
+    var showSheet by remember { mutableStateOf(false) }
 
     val me = users[Repo.uid] ?: Person(Repo.uid, Repo.name)
     val partner = users.values.firstOrNull { it.uid != Repo.uid }
 
-    Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).systemBarsPadding().padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
+    Column(Modifier.fillMaxSize().systemBarsPadding().padding(20.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Together", fontWeight = FontWeight.Bold, color = Color.Gray, modifier = Modifier.weight(1f))
+            Text(if (me.visible) "Sharing" else "Hidden", color = Color.Gray, fontSize = 13.sp)
+            Spacer(Modifier.width(8.dp))
+            Switch(checked = me.visible, onCheckedChange = { Repo.setVisible(it) })
+        }
         BatteryHint()
 
-        if (partner == null) {
-            Card(Modifier.fillMaxWidth()) {
-                Text("Waiting for your partner. Code: ${Repo.room}", Modifier.padding(20.dp))
+        Column(
+            Modifier.weight(1f).fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            if (partner == null) {
+                Text("Waiting for your partner", fontSize = 22.sp)
+                Spacer(Modifier.height(8.dp))
+                Text("Code: ${Repo.room}", color = Color.Gray)
+            } else {
+                PartnerStatus(partner, nicks, now) { editNick = partner }
             }
-        } else {
-            PartnerCard(partner, nicks, now) { editNick = partner }
+        }
+
+        if (partner != null) {
             Button(onClick = { Repo.talk() }, modifier = Modifier.fillMaxWidth().height(52.dp)) {
                 Text("💬 I want to talk")
             }
+            Spacer(Modifier.height(8.dp))
         }
-
-        HorizontalDivider()
-
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Me: ${nicks[me.uid]?.takeIf { it.isNotBlank() } ?: me.name}", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-            TextButton(onClick = { editNick = me }) { Text("✏️ Nickname") }
-        }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Share my online status", Modifier.weight(1f))
-            Switch(checked = me.visible, onCheckedChange = { Repo.setVisible(it) })
-        }
-
-        if (me.visible) {
-            Section("Doing", TAGS, me.tag) { Repo.setField("tag", it) }
-            var custom by remember { mutableStateOf("") }
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(custom, { custom = it }, label = { Text("Custom") }, singleLine = true, modifier = Modifier.weight(1f))
-                Button(onClick = { Repo.setField("tag", custom); custom = "" }, enabled = custom.isNotBlank()) { Text("Set") }
-            }
-            Section("Mood", MOODS, me.mood) { Repo.setField("mood", it) }
-            Section("Cycle", BODY, me.body) { Repo.setField("body", it) }
-        } else {
-            Text("Your partner sees that you turned this off.", color = Color.Gray)
+        val mine = listOf(me.tag, me.mood, me.body).filter { it.isNotBlank() }
+        OutlinedButton(onClick = { showSheet = true }, modifier = Modifier.fillMaxWidth()) {
+            Text(if (mine.isEmpty()) "Set my status (optional)" else "Me: " + mine.joinToString(" · "))
         }
     }
 
+    if (showSheet) {
+        ModalBottomSheet(onDismissRequest = { showSheet = false }) {
+            MySheet(me, nicks) { editNick = me }
+        }
+    }
     editNick?.let { p ->
         NickDialog(nicks[p.uid] ?: "", onDismiss = { editNick = null }) { Repo.setNick(p.uid, it); editNick = null }
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun PartnerCard(p: Person, nicks: Map<String, String>, now: Long, onEdit: () -> Unit) {
+fun PartnerStatus(p: Person, nicks: Map<String, String>, now: Long, onEdit: () -> Unit) {
     val dot = when {
         !p.visible -> Color(0xFFFF9800)
         p.online -> Color(0xFF2ECC71)
-        else -> Color(0xFF777777)
+        else -> Color(0xFF666666)
     }
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(18.dp).background(dot, CircleShape))
-                Spacer(Modifier.width(12.dp))
-                Text(nicks[p.uid]?.takeIf { it.isNotBlank() } ?: p.name, fontSize = 24.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                TextButton(onClick = onEdit) { Text("✏️") }
-            }
-            Text(statusLine(p, now), fontSize = 16.sp)
-            if (p.visible) {
-                listOf(p.tag, p.mood, p.body).filter { it.isNotBlank() }.forEach { Text(it, fontSize = 18.sp) }
+    val extras = if (p.visible) listOf(p.mood, p.tag, p.body).filter { it.isNotBlank() } else emptyList()
+    if (extras.isNotEmpty()) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)) {
+            extras.forEach { e ->
+                Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surfaceVariant) {
+                    Text(e, Modifier.padding(horizontal = 14.dp, vertical = 6.dp), fontSize = 16.sp)
+                }
             }
         }
+        Spacer(Modifier.height(28.dp))
+    }
+    Box(Modifier.size(96.dp).background(dot, CircleShape))
+    Spacer(Modifier.height(20.dp))
+    TextButton(onClick = onEdit) {
+        Text(nicks[p.uid]?.takeIf { it.isNotBlank() } ?: p.name, fontSize = 26.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
+    }
+    val (main, sub) = status(p, now)
+    Text(main, fontSize = 34.sp, fontWeight = FontWeight.Bold, color = dot)
+    if (sub.isNotBlank()) {
+        Spacer(Modifier.height(6.dp))
+        Text(sub, color = Color.Gray, fontSize = 15.sp)
     }
 }
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun Section(title: String, options: List<String>, current: String, onPick: (String) -> Unit) {
+fun MySheet(me: Person, nicks: Map<String, String>, onEditNick: () -> Unit) {
+    var customOpen by remember { mutableStateOf(false) }
+    Column(
+        Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).padding(bottom = 32.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("All optional. Tap again to remove.", color = Color.Gray, modifier = Modifier.weight(1f))
+            TextButton(onClick = { listOf("tag", "mood", "body").forEach { Repo.setField(it, "") } }) { Text("Clear all") }
+        }
+        Section("Doing", TAGS, me.tag, onCustom = { customOpen = true }) { Repo.setField("tag", it) }
+        Section("Mood", MOODS, me.mood) { Repo.setField("mood", it) }
+        Section("Cycle", BODY, me.body) { Repo.setField("body", it) }
+        TextButton(onClick = onEditNick) {
+            Text("✏️ My nickname: ${nicks[me.uid]?.takeIf { it.isNotBlank() } ?: me.name}")
+        }
+    }
+    if (customOpen) {
+        NickDialog("", title = "What are you doing?", onDismiss = { customOpen = false }) { Repo.setField("tag", it); customOpen = false }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun Section(title: String, options: List<String>, current: String, onCustom: (() -> Unit)? = null, onPick: (String) -> Unit) {
     Text(title, fontWeight = FontWeight.Bold)
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         options.forEach { o ->
@@ -215,15 +247,18 @@ fun Section(title: String, options: List<String>, current: String, onPick: (Stri
         if (current.isNotBlank() && current !in options) {
             FilterChip(selected = true, onClick = { onPick("") }, label = { Text(current) })
         }
+        if (onCustom != null) {
+            FilterChip(selected = false, onClick = onCustom, label = { Text("+ Custom") })
+        }
     }
 }
 
 @Composable
-fun NickDialog(current: String, onDismiss: () -> Unit, onSave: (String) -> Unit) {
+fun NickDialog(current: String, title: String = "Nickname (both of you see it)", onDismiss: () -> Unit, onSave: (String) -> Unit) {
     var text by remember { mutableStateOf(current) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Nickname (both of you see it)") },
+        title = { Text(title) },
         text = { OutlinedTextField(text, { text = it }, singleLine = true) },
         confirmButton = { TextButton(onClick = { onSave(text) }) { Text("Save") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
@@ -247,11 +282,12 @@ fun BatteryHint() {
     }
 }
 
-fun statusLine(p: Person, now: Long): String = when {
-    !p.visible -> "Turned off their online status"
-    p.online -> "Online · ${dur(now - p.since)}"
-    p.lastSeen == 0L -> "Offline"
-    else -> "Last online ${ago(now - p.lastSeen)} · was on for ${dur(p.lastSeen - p.since)}"
+/** Big status word, plus the smaller line under it. */
+fun status(p: Person, now: Long): Pair<String, String> = when {
+    !p.visible -> "Hidden" to "Turned off their online status"
+    p.online -> "Online" to "for ${dur(now - p.since)}"
+    p.lastSeen == 0L -> "Offline" to ""
+    else -> "Offline" to "Last online ${ago(now - p.lastSeen)} · was on for ${dur(p.lastSeen - p.since)}"
 }
 
 private fun dur(ms: Long): String {
