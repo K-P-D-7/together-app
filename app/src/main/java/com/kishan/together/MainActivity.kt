@@ -11,9 +11,14 @@ import android.os.PowerManager
 import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -22,9 +27,12 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
@@ -52,7 +60,8 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         if (Repo.configured) askPermissions()
         setContent {
-            MaterialTheme(colorScheme = darkColorScheme()) {
+            val theme by Repo.theme.collectAsState()
+            MaterialTheme(colorScheme = THEMES[theme] ?: darkColorScheme()) {
                 Surface(Modifier.fillMaxSize()) { App(onSetup = ::askPermissions) }
             }
         }
@@ -125,12 +134,25 @@ fun Setup(onDone: () -> Unit) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun Home() {
+    val ctx = LocalContext.current
     val users by Repo.users.collectAsState()
     val nicks by Repo.nicks.collectAsState()
+    val pfps by Repo.pfps.collectAsState()
     var now by remember { mutableLongStateOf(Repo.now()) }
     LaunchedEffect(Unit) { while (true) { now = Repo.now(); delay(1000) } }
     var editNick by remember { mutableStateOf<Person?>(null) }
+    var profileFor by remember { mutableStateOf<Person?>(null) }
     var showSheet by remember { mutableStateOf(false) }
+
+    var photoFor by remember { mutableStateOf<String?>(null) }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        val target = photoFor
+        if (uri != null && target != null) {
+            val b64 = encodePhoto(ctx, uri)
+            if (b64 != null) Repo.setPfp(target, b64)
+            else Toast.makeText(ctx, "Couldn't read that photo", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     val me = users[Repo.uid] ?: Person(Repo.uid, Repo.name)
     val partner = users.values.firstOrNull { it.uid != Repo.uid }
@@ -154,12 +176,15 @@ fun Home() {
                 Spacer(Modifier.height(8.dp))
                 Text("Code: ${Repo.room}", color = Color.Gray)
             } else {
-                PartnerStatus(partner, nicks, now) { editNick = partner }
+                PartnerStatus(partner, nicks, pfps[partner.uid], now) { profileFor = partner }
             }
         }
 
         if (partner != null) {
-            Button(onClick = { Repo.talk() }, modifier = Modifier.fillMaxWidth().height(52.dp)) {
+            Button(onClick = {
+                Repo.talk()
+                Toast.makeText(ctx, "Sent! ${Repo.display(partner)} will get a notification", Toast.LENGTH_SHORT).show()
+            }, modifier = Modifier.fillMaxWidth().height(52.dp)) {
                 Text("💬 I want to talk")
             }
             Spacer(Modifier.height(8.dp))
@@ -172,17 +197,52 @@ fun Home() {
 
     if (showSheet) {
         ModalBottomSheet(onDismissRequest = { showSheet = false }) {
-            MySheet(me, nicks) { editNick = me }
+            MySheet(me, nicks, pfps[me.uid]) { profileFor = me }
         }
+    }
+    profileFor?.let { p ->
+        ProfileDialog(
+            title = if (p.uid == Repo.uid) "Me" else Repo.display(p),
+            hasPhoto = !pfps[p.uid].isNullOrBlank(),
+            onDismiss = { profileFor = null },
+            onPhoto = {
+                profileFor = null
+                photoFor = p.uid
+                picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+            },
+            onRemovePhoto = { Repo.setPfp(p.uid, null); profileFor = null },
+            onNick = { profileFor = null; editNick = p },
+        )
     }
     editNick?.let { p ->
         NickDialog(nicks[p.uid] ?: "", onDismiss = { editNick = null }) { Repo.setNick(p.uid, it); editNick = null }
     }
 }
 
+/** Profile photo with a coloured status ring, or a plain coloured dot when there is no photo. */
+@Composable
+fun Avatar(photo: String?, ring: Color, size: Dp, onClick: () -> Unit) {
+    val img = remember(photo) { photo?.takeIf { it.isNotBlank() }?.let { decodePhoto(it) } }
+    if (img == null) {
+        Box(Modifier.size(size).clip(CircleShape).background(ring).clickable(onClick = onClick))
+        return
+    }
+    Box(contentAlignment = Alignment.BottomEnd) {
+        Image(
+            img, null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.size(size).border(5.dp, ring, CircleShape).padding(9.dp).clip(CircleShape).clickable(onClick = onClick),
+        )
+        Box(
+            Modifier.padding(4.dp).size(size / 5).border(3.dp, MaterialTheme.colorScheme.background, CircleShape)
+                .padding(2.dp).clip(CircleShape).background(ring)
+        )
+    }
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun PartnerStatus(p: Person, nicks: Map<String, String>, now: Long, onEdit: () -> Unit) {
+fun PartnerStatus(p: Person, nicks: Map<String, String>, photo: String?, now: Long, onProfile: () -> Unit) {
     val dot = when {
         !p.visible -> Color(0xFFFF9800)
         p.online -> Color(0xFF2ECC71)
@@ -199,9 +259,9 @@ fun PartnerStatus(p: Person, nicks: Map<String, String>, now: Long, onEdit: () -
         }
         Spacer(Modifier.height(28.dp))
     }
-    Box(Modifier.size(96.dp).background(dot, CircleShape))
+    Avatar(photo, dot, if (photo.isNullOrBlank()) 96.dp else 150.dp, onProfile)
     Spacer(Modifier.height(20.dp))
-    TextButton(onClick = onEdit) {
+    TextButton(onClick = onProfile) {
         Text(nicks[p.uid]?.takeIf { it.isNotBlank() } ?: p.name, fontSize = 26.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
     }
     val (main, sub) = status(p, now)
@@ -214,8 +274,9 @@ fun PartnerStatus(p: Person, nicks: Map<String, String>, now: Long, onEdit: () -
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun MySheet(me: Person, nicks: Map<String, String>, onEditNick: () -> Unit) {
+fun MySheet(me: Person, nicks: Map<String, String>, myPhoto: String?, onProfile: () -> Unit) {
     var customOpen by remember { mutableStateOf(false) }
+    val theme by Repo.theme.collectAsState()
     Column(
         Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).padding(bottom = 32.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -227,13 +288,45 @@ fun MySheet(me: Person, nicks: Map<String, String>, onEditNick: () -> Unit) {
         Section("Doing", TAGS, me.tag, onCustom = { customOpen = true }) { Repo.setField("tag", it) }
         Section("Mood", MOODS, me.mood) { Repo.setField("mood", it) }
         Section("Cycle", BODY, me.body) { Repo.setField("body", it) }
-        TextButton(onClick = onEditNick) {
-            Text("✏️ My nickname: ${nicks[me.uid]?.takeIf { it.isNotBlank() } ?: me.name}")
+
+        Text("Theme", fontWeight = FontWeight.Bold)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            THEMES.forEach { (name, scheme) ->
+                FilterChip(
+                    selected = theme == name,
+                    onClick = { Repo.setTheme(name) },
+                    label = { Text(name) },
+                    leadingIcon = { Box(Modifier.size(14.dp).clip(CircleShape).background(scheme.primary)) },
+                )
+            }
+        }
+
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Avatar(myPhoto, MaterialTheme.colorScheme.primary, 44.dp, onProfile)
+            TextButton(onClick = onProfile) {
+                Text("My photo & nickname: ${nicks[me.uid]?.takeIf { it.isNotBlank() } ?: me.name}")
+            }
         }
     }
     if (customOpen) {
         NickDialog("", title = "What are you doing?", onDismiss = { customOpen = false }) { Repo.setField("tag", it); customOpen = false }
     }
+}
+
+@Composable
+fun ProfileDialog(title: String, hasPhoto: Boolean, onDismiss: () -> Unit, onPhoto: () -> Unit, onRemovePhoto: () -> Unit, onNick: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column {
+                TextButton(onClick = onPhoto) { Text("🖼 Change photo") }
+                if (hasPhoto) TextButton(onClick = onRemovePhoto) { Text("🗑 Remove photo") }
+                TextButton(onClick = onNick) { Text("✏️ Change nickname") }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+    )
 }
 
 @OptIn(ExperimentalLayoutApi::class)

@@ -37,6 +37,11 @@ class PresenceService : Service() {
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(NotificationChannel("running", "Running", NotificationManager.IMPORTANCE_MIN))
         nm.createNotificationChannel(NotificationChannel("alerts", "Alerts", NotificationManager.IMPORTANCE_HIGH))
+        nm.createNotificationChannel(NotificationChannel("talk", "Wants to talk", NotificationManager.IMPORTANCE_HIGH).apply {
+            enableVibration(true)
+            vibrationPattern = longArrayOf(0, 300, 150, 300, 150, 300)
+            lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+        })
 
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
         val n = NotificationCompat.Builder(this, "running")
@@ -63,7 +68,7 @@ class PresenceService : Service() {
 
     private fun alert(kind: String, text: String) {
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
-        val n = NotificationCompat.Builder(this, "alerts")
+        val n = NotificationCompat.Builder(this, if (kind == "talk") "talk" else "alerts")
             .setSmallIcon(android.R.drawable.presence_online)
             .setContentTitle(text)
             .setPriority(NotificationCompat.PRIORITY_HIGH)

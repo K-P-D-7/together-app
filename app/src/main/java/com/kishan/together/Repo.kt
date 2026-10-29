@@ -29,6 +29,8 @@ object Repo {
 
     val users = MutableStateFlow<Map<String, Person>>(emptyMap())
     val nicks = MutableStateFlow<Map<String, String>>(emptyMap())
+    val pfps = MutableStateFlow<Map<String, String>>(emptyMap())
+    val theme by lazy { MutableStateFlow(prefs.getString("theme", "Lavender")!!) }
     var onEvent: ((String, String) -> Unit)? = null
 
     private var offset = 0L
@@ -72,6 +74,9 @@ object Repo {
         })
         root.child("nicks").addValueEventListener(listener { s ->
             nicks.value = s.children.associate { it.key!! to (it.getValue(String::class.java) ?: "") }
+        })
+        root.child("pfp").addValueEventListener(listener { s ->
+            pfps.value = s.children.associate { it.key!! to (it.getValue(String::class.java) ?: "") }
         })
         root.child("users").addValueEventListener(listener { s ->
             val map = s.children.associate { it.key!! to parse(it) }
@@ -146,6 +151,17 @@ object Repo {
     fun setNick(uid: String, nick: String) {
         val ref = db.getReference("rooms/$room/nicks/$uid")
         if (nick.isBlank()) ref.removeValue() else ref.setValue(nick.trim())
+    }
+
+    /** Either person can set either photo; the latest write wins. Null removes it. */
+    fun setPfp(uid: String, b64: String?) {
+        val ref = db.getReference("rooms/$room/pfp/$uid")
+        if (b64 == null) ref.removeValue() else ref.setValue(b64)
+    }
+
+    fun setTheme(name: String) {
+        prefs.edit().putString("theme", name).apply()
+        theme.value = name
     }
 
     fun talk() {
