@@ -47,6 +47,9 @@ object Repo {
     val room get() = prefs.getString("room", "")!!
     val visible get() = prefs.getBoolean("visible", true)
     val configured get() = name.isNotBlank() && room.isNotBlank()
+    var autostartAsked
+        get() = prefs.getBoolean("autostartAsked", false)
+        set(v) = prefs.edit().putBoolean("autostartAsked", v).apply()
 
     fun now() = System.currentTimeMillis() + offset
 

@@ -1,12 +1,15 @@
 package com.kishan.together
 
 import android.Manifest
+import android.content.ComponentName
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -30,15 +33,54 @@ private val TAGS = listOf("📚 Studying", "📱 Shorting", "📸 Reeling", "�
 private val MOODS = listOf("😊 Happy", "😡 Mad", "😢 Sad", "😞 Depressed", "😤 Hate you")
 private val BODY = listOf("🩸 Period", "😣 PMSing")
 
+// Phone makers that block background apps unless "Autostart" is on.
+private val AUTOSTART = listOf(
+    ComponentName("com.miui.securitycenter", "com.miui.permcenter.autostart.AutoStartManagementActivity"),
+    ComponentName("com.coloros.safecenter", "com.coloros.safecenter.permission.startup.StartupAppListActivity"),
+    ComponentName("com.coloros.safecenter", "com.coloros.safecenter.startupapp.StartupAppListActivity"),
+    ComponentName("com.oplus.safecenter", "com.oplus.safecenter.permission.startup.StartupAppListActivity"),
+    ComponentName("com.vivo.permissionmanager", "com.vivo.permissionmanager.activity.BgStartUpManagerActivity"),
+    ComponentName("com.iqoo.secure", "com.iqoo.secure.ui.phoneoptimize.BgStartUpManager"),
+    ComponentName("com.huawei.systemmanager", "com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity"),
+)
+
 class MainActivity : ComponentActivity() {
-    private val notifPerm = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
+    private val notifPerm = registerForActivityResult(ActivityResultContracts.RequestPermission()) { askBattery() }
+    private val batteryReq = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { askAutostart() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        if (Build.VERSION.SDK_INT >= 33) notifPerm.launch(Manifest.permission.POST_NOTIFICATIONS)
+        if (Repo.configured) askPermissions()
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
-                Surface(Modifier.fillMaxSize()) { App() }
+                Surface(Modifier.fillMaxSize()) { App(onSetup = ::askPermissions) }
+            }
+        }
+    }
+
+    /** Asks for everything the app needs, one system prompt after another. */
+    private fun askPermissions() {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) notifPerm.launch(Manifest.permission.POST_NOTIFICATIONS)
+        else askBattery()
+    }
+
+    private fun askBattery() {
+        if (getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName)) return askAutostart()
+        runCatching {
+            batteryReq.launch(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")))
+        }.onFailure { askAutostart() }
+    }
+
+    private fun askAutostart() {
+        if (Repo.autostartAsked) return
+        Repo.autostartAsked = true
+        for (c in AUTOSTART) {
+            val opened = runCatching { startActivity(Intent().setComponent(c).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }.isSuccess
+            if (opened) {
+                Toast.makeText(this, "Turn ON Together here, then come back", Toast.LENGTH_LONG).show()
+                return
             }
         }
     }
@@ -50,11 +92,11 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun App() {
+fun App(onSetup: () -> Unit) {
     val ctx = LocalContext.current
     var configured by remember { mutableStateOf(Repo.configured) }
     if (configured) Home()
-    else Setup { configured = true; PresenceService.start(ctx) }
+    else Setup { configured = true; PresenceService.start(ctx); onSetup() }
 }
 
 @Composable
